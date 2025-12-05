@@ -21,7 +21,9 @@ const Icons = {
   Check: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
   Download: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
   Magic: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m5 16 .5-1.5 .5 1.5 1.5 .5-1.5 .5-.5 1.5-.5-1.5-1.5-.5Z"/><path d="m15 4 1 3 3 1-3 1-1 3-1-3-3-1 3-1Z"/><path d="M20 20c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2Z"/></svg>,
-  ArrowLeft: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+  ArrowLeft: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>,
+  Scissors: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>,
+  X: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
 };
 
 const App = () => {
@@ -56,6 +58,13 @@ const App = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const cursorRef = useRef<HTMLDivElement>(null);
   const lastMousePos = useRef<Point | null>(null);
+
+  // Background Pattern Style (Dot pattern) for Editor
+  const editorBackgroundStyle = {
+    backgroundImage: "radial-gradient(#cbd5e1 1px, transparent 1px)",
+    backgroundSize: "20px 20px",
+    backgroundColor: "white"
+  };
 
   // --- Effects ---
 
@@ -145,7 +154,7 @@ const App = () => {
     
     ctx.globalAlpha = 1.0;
 
-  }, [originalImageObj, paths]);
+  }, [originalImageObj, paths, mode]);
 
   // --- Handlers ---
 
@@ -296,8 +305,6 @@ const App = () => {
 
     setScale(newScale);
     setPan({ x: newPanX, y: newPanY });
-    
-    // Update cursor pos immediately if wheel affects it? No, mouse position stays same relative to screen.
   };
 
   const handleUndo = () => {
@@ -315,71 +322,31 @@ const App = () => {
   };
 
   // --- Core Logic: Call Gemini ---
-  const handleStartRemoval = async () => {
-    if (!originalImageObj || paths.length === 0) return;
-
+  
+  const processImageRequest = async (prompt: string, imageBase64: string) => {
     setIsProcessing(true);
-    setLoadingText("正在准备图片...");
-
     try {
-      // 1. Create a composite image for the model
-      // We draw the image and the mask (in red) into a single base64 string
-      const tempCanvas = document.createElement("canvas");
-      tempCanvas.width = originalImageObj.width;
-      tempCanvas.height = originalImageObj.height;
-      const ctx = tempCanvas.getContext("2d");
-      
-      if (!ctx) throw new Error("Canvas context failed");
-
-      // Draw original
-      ctx.drawImage(originalImageObj, 0, 0);
-
-      // Draw Mask (Solid Red for the model to see clearly)
-      // Gemini 2.5 Flash Image works well with visual cues.
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.strokeStyle = "rgba(255, 0, 0, 1)"; // Fully opaque red for the model prompt
-      ctx.fillStyle = "rgba(255, 0, 0, 1)";
-      
-      paths.forEach(path => {
-        ctx.lineWidth = path.size;
-        ctx.beginPath();
-        if (path.points.length > 0) {
-            ctx.moveTo(path.points[0].x, path.points[0].y);
-            if (path.points.length === 1) {
-                ctx.arc(path.points[0].x, path.points[0].y, path.size/2, 0, Math.PI*2);
-                ctx.fill();
-            } else {
-                path.points.forEach((p, i) => { if(i>0) ctx.lineTo(p.x, p.y); });
-                ctx.stroke();
-            }
-        }
-      });
-
-      const base64Data = tempCanvas.toDataURL("image/jpeg", 0.9).split(",")[1];
-
-      setLoadingText("正在努力擦除中...");
-
-      // 2. Call API
+      // Call API
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-image',
         contents: {
           parts: [
             {
               inlineData: {
-                mimeType: "image/jpeg",
-                data: base64Data
+                mimeType: "image/png", // Tell the model we are sending a PNG
+                data: imageBase64
               }
             },
             {
-              text: "Remove the object covered by the red mask in this image. Replace it seamlessly with the background. Return only the image."
+              text: prompt
             }
           ]
         }
       });
 
-      // 3. Process Response
+      // Process Response
       let resultBase64 = null;
+      let mimeType = "image/png"; // Default to PNG
       
       // Iterate parts to find image
       const candidate = response.candidates?.[0];
@@ -387,13 +354,16 @@ const App = () => {
         for (const part of candidate.content.parts) {
           if (part.inlineData && part.inlineData.data) {
             resultBase64 = part.inlineData.data;
+            if (part.inlineData.mimeType) {
+                mimeType = part.inlineData.mimeType;
+            }
             break;
           }
         }
       }
 
       if (resultBase64) {
-        setProcessedImageSrc(`data:image/png;base64,${resultBase64}`);
+        setProcessedImageSrc(`data:${mimeType};base64,${resultBase64}`);
         setMode("compare");
       } else {
         alert("未能生成图片，请重试。");
@@ -407,6 +377,73 @@ const App = () => {
     }
   };
 
+  const handleStartRemoval = async () => {
+    if (!originalImageObj || paths.length === 0) return;
+
+    setLoadingText("正在准备图片...");
+
+    // 1. Create a composite image for the model
+    // We draw the image and the mask (in red) into a single base64 string
+    const tempCanvas = document.createElement("canvas");
+    tempCanvas.width = originalImageObj.width;
+    tempCanvas.height = originalImageObj.height;
+    const ctx = tempCanvas.getContext("2d");
+    
+    if (!ctx) return;
+
+    // Draw original
+    ctx.drawImage(originalImageObj, 0, 0);
+
+    // Draw Mask (Solid Red for the model to see clearly)
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "rgba(255, 0, 0, 1)";
+    ctx.fillStyle = "rgba(255, 0, 0, 1)";
+    
+    paths.forEach(path => {
+      ctx.lineWidth = path.size;
+      ctx.beginPath();
+      if (path.points.length > 0) {
+          ctx.moveTo(path.points[0].x, path.points[0].y);
+          if (path.points.length === 1) {
+              ctx.arc(path.points[0].x, path.points[0].y, path.size/2, 0, Math.PI*2);
+              ctx.fill();
+          } else {
+              path.points.forEach((p, i) => { if(i>0) ctx.lineTo(p.x, p.y); });
+              ctx.stroke();
+          }
+      }
+    });
+
+    // Use PNG to preserve quality and transparency of input (if any)
+    const base64Data = tempCanvas.toDataURL("image/png").split(",")[1];
+    setLoadingText("正在努力擦除中...");
+    
+    const prompt = "Remove the object covered by the red mask in this image. Replace it seamlessly with the background. Return only the image.";
+    await processImageRequest(prompt, base64Data);
+  };
+
+  const handleRemoveBackground = async () => {
+     if (!originalImageObj) return;
+     
+     setLoadingText("正在去除背景...");
+
+     // Get Original Image Base64
+     const tempCanvas = document.createElement("canvas");
+     tempCanvas.width = originalImageObj.width;
+     tempCanvas.height = originalImageObj.height;
+     const ctx = tempCanvas.getContext("2d");
+     if (!ctx) return;
+     ctx.drawImage(originalImageObj, 0, 0);
+     
+     // Use PNG to preserve input transparency and avoid JPEG artifacts
+     const base64Data = tempCanvas.toDataURL("image/png").split(",")[1];
+     
+     // Explicitly request transparency and alpha channel, FORBID CHECKERBOARD
+     const prompt = "Remove the background of the image. The output image MUST be a PNG with an alpha channel (transparent background). CRITICAL: DO NOT RENDER A CHECKERBOARD OR GRID PATTERN TO SIMULATE TRANSPARENCY. The background pixels must be completely transparent (alpha=0). Return the main subject only.";
+     await processImageRequest(prompt, base64Data);
+  };
+
   const handleApply = () => {
     if (processedImageSrc) {
       setImageSrc(processedImageSrc);
@@ -417,11 +454,30 @@ const App = () => {
     }
   };
 
+  const handleDiscard = () => {
+    // Just reset result and go back to edit, keeping original image and masks
+    setProcessedImageSrc(null);
+    setMode("edit");
+  };
+
   const handleDownload = () => {
-    if (processedImageSrc) {
+    // If we are in compare mode, download the result.
+    // If we are in edit mode, download the current source image.
+    const targetSrc = (mode === "compare" && processedImageSrc) ? processedImageSrc : imageSrc;
+    if (targetSrc) {
       const link = document.createElement("a");
-      link.download = "removed_object.png";
-      link.href = processedImageSrc;
+      
+      // Determine extension from MIME type to ensure transparency is saved correctly
+      const mimeMatch = targetSrc.match(/^data:(image\/[a-zA-Z+]+);base64,/);
+      let ext = "png"; // Default to png for transparency support
+      if (mimeMatch && mimeMatch[1]) {
+          const mime = mimeMatch[1];
+          if (mime === "image/jpeg") ext = "jpg";
+          else if (mime === "image/webp") ext = "webp";
+      }
+
+      link.download = `image_${Date.now()}.${ext}`;
+      link.href = targetSrc;
       link.click();
     }
   };
@@ -439,19 +495,27 @@ const App = () => {
     return (
       <div className="flex flex-col items-center justify-center w-full h-full p-4">
         <div 
-          className="relative w-full max-w-5xl shadow-2xl rounded-lg overflow-hidden bg-gray-100 select-none"
-          style={{ aspectRatio: `${aspectRatio}` }}
+          className="relative w-full max-w-5xl shadow-2xl rounded-lg overflow-hidden select-none bg-white"
+          style={{ 
+            aspectRatio: `${aspectRatio}`,
+            ...editorBackgroundStyle // Apply the Dot Pattern background to Compare View
+          }}
           ref={containerRef}
         >
-          {/* Bottom Layer: Original */}
-          <img 
-            src={imageSrc!} 
-            className="absolute top-0 left-0 w-full h-full object-contain" 
-            alt="Original" 
-            draggable={false}
-          />
+          {/* Bottom Layer: Original (Clipped to Left Side) */}
+          <div 
+             className="absolute top-0 left-0 w-full h-full overflow-hidden"
+             style={{ clipPath: `inset(0 ${100 - sliderPos}% 0 0)` }}
+          >
+              <img 
+                src={imageSrc!} 
+                className="absolute top-0 left-0 w-full h-full object-contain" 
+                alt="Original" 
+                draggable={false}
+              />
+          </div>
           
-          {/* Top Layer: Result (Clipped) */}
+          {/* Top Layer: Result (Clipped to Right Side) */}
           <div 
             className="absolute top-0 left-0 w-full h-full overflow-hidden"
             style={{ 
@@ -488,7 +552,7 @@ const App = () => {
 
            {/* Labels */}
            <div className="absolute top-4 left-4 bg-black/50 text-white px-2 py-1 rounded text-sm pointer-events-none z-10">原图</div>
-           <div className="absolute top-4 right-4 bg-black/50 text-white px-2 py-1 rounded text-sm pointer-events-none z-10">去除后</div>
+           <div className="absolute top-4 right-4 bg-black/50 text-white px-2 py-1 rounded text-sm pointer-events-none z-10">处理后</div>
         </div>
       </div>
     );
@@ -515,8 +579,18 @@ const App = () => {
       `}</style>
 
       {/* Header */}
-      <header className="flex-none h-14 bg-white border-b border-gray-200 flex items-center justify-center px-4 shadow-sm z-10">
+      <header className="flex-none h-14 bg-white border-b border-gray-200 flex items-center justify-center px-4 shadow-sm z-10 relative">
         <h1 className="text-lg font-semibold tracking-wide">图像物体去除 V1.0 By Gambey</h1>
+        {imageSrc && (
+          <button 
+            onClick={handleDownload}
+            className="absolute right-4 flex items-center gap-2 px-4 py-1.5 text-sm font-medium text-gray-600 bg-gray-50 border border-gray-200 hover:bg-gray-100 hover:text-gray-900 rounded-full transition shadow-sm"
+            title="下载当前显示的图片"
+          >
+            <Icons.Download />
+            <span className="hidden sm:inline">下载</span>
+          </button>
+        )}
       </header>
 
       {/* Main Area */}
@@ -554,10 +628,7 @@ const App = () => {
                 className={`w-full h-full relative overflow-hidden touch-none ${
                   tool === "hand" ? (isPanning ? "cursor-grabbing" : "cursor-grab") : "cursor-none"
                 }`}
-                style={{
-                  backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)',
-                  backgroundSize: '24px 24px'
-                }}
+                style={editorBackgroundStyle}
                 onMouseDown={handlePointerDown}
                 onMouseMove={handlePointerMove}
                 onMouseUp={handlePointerUp}
@@ -636,7 +707,7 @@ const App = () => {
                 <button 
                   onClick={() => setTool("hand")} 
                   className={`p-3 rounded-md transition ${tool === "hand" ? "bg-white shadow text-blue-600" : "text-gray-500 hover:bg-gray-200"}`}
-                  title="抓手 (H)"
+                  title="移动 (H)"
                 >
                   <Icons.Hand />
                 </button>
@@ -671,6 +742,16 @@ const App = () => {
                   </button>
                 </div>
 
+                {/* Remove Background Button */}
+                <button 
+                  onClick={handleRemoveBackground}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-full font-medium transition shadow-sm bg-indigo-50 text-indigo-600 hover:bg-indigo-100 whitespace-nowrap"
+                  title="自动去除背景"
+                >
+                   <Icons.Scissors />
+                   去除背景
+                </button>
+
                 <button 
                   onClick={handleStartRemoval}
                   disabled={paths.length === 0}
@@ -688,11 +769,11 @@ const App = () => {
             /* Compare Mode Toolbar */
             <div className="flex items-center gap-6">
               <button 
-                onClick={() => setMode("edit")}
-                className="flex items-center gap-2 px-5 py-2.5 text-gray-700 hover:bg-gray-100 rounded-full font-medium transition"
+                onClick={handleDiscard}
+                className="flex items-center gap-2 px-5 py-2.5 text-red-600 hover:bg-red-50 border border-red-200 hover:border-red-300 rounded-full font-medium transition"
               >
-                <Icons.ArrowLeft />
-                继续涂抹
+                <Icons.X />
+                放弃修改
               </button>
 
               <button 
@@ -701,14 +782,6 @@ const App = () => {
               >
                 <Icons.Check />
                 应用当前效果
-              </button>
-
-              <button 
-                 onClick={handleDownload}
-                 className="flex items-center gap-2 px-5 py-2.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-full font-medium transition"
-              >
-                <Icons.Download />
-                下载图片
               </button>
             </div>
           )}
