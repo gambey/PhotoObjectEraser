@@ -95,9 +95,23 @@ const App = () => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (mode !== "edit") return;
+      
+      // Tools
       if (e.key.toLowerCase() === "b") setTool("brush");
       if (e.key.toLowerCase() === "h") setTool("hand");
+
+      // Brush Size
+      if (e.key === "-" || e.key === "_") {
+        setBrushSize(prev => Math.max(5, prev - 5));
+      }
+      if (e.key === "=" || e.key === "+") {
+        setBrushSize(prev => Math.min(100, prev + 5));
+      }
+
+      // Undo
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") handleUndo();
+      
+      // Pan
       if (e.code === "Space") {
         if (!e.repeat) setTool("hand");
       }
